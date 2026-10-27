@@ -46,9 +46,84 @@ the disk, so resize the disk on the hypervisor before booting
 (`qemu-img resize`, ideally after converting to qcow2). Booting it as-is leaves a
 12 GB root; 100 GB or more is recommended for SUSE AI.
 
-Metal3 (`global.ironicIP: 192.168.122.12`), MetalLB and Rancher Turtles were added
-on top, following the
-[SUSE Telco Metal3 quickstart](https://documentation.suse.com/suse-telco/3.7/html/telco/quickstart-metal3.html).
+### Metal3 and CAPI providers
+
+Added on top of the quickstart cluster, following the
+[SUSE Telco Metal3 quickstart](https://documentation.suse.com/suse-telco/3.7/html/telco/quickstart-metal3.html)
+(chart versions from the SUSE Telco 3.7 release notes). Rancher 2.15 already
+ships the Turtles operator; MetalLB is needed to expose Ironic on a fixed IP.
+
+1. **MetalLB pool for the Ironic IP** (skip if an existing pool already serves
+   `192.168.122.12`; it must not overlap the API VIP/ingress IPs or the
+   downstream VIP `192.168.122.20`):
+
+   ```yaml
+   apiVersion: metallb.io/v1beta1
+   kind: IPAddressPool
+   metadata:
+     name: ironic-ip-pool
+     namespace: metallb-system
+   spec:
+     addresses:
+       - 192.168.122.12/32
+     serviceAllocation:
+       priority: 100
+       namespaces:
+         - metal3-system
+   ---
+   apiVersion: metallb.io/v1beta1
+   kind: L2Advertisement
+   metadata:
+     name: ironic-ip-pool-l2-adv
+     namespace: metallb-system
+   spec:
+     ipAddressPools:
+       - ironic-ip-pool
+   ```
+
+2. **Metal3** (Ironic + baremetal-operator), values used:
+
+   ```yaml
+   # metal3-values.yaml
+   global:
+     ironicIP: 192.168.122.12
+     enable_vmedia_tls: false   # Ironic serves the IPA ISO over http://<ironicIP>:6180
+   ```
+
+   ```bash
+   helm install metal3 oci://registry.suse.com/edge/charts/metal3 \
+     --version 307.0.31+up0.16.0 \
+     --namespace metal3-system --create-namespace \
+     -f metal3-values.yaml
+   ```
+
+3. **CAPI providers** (core CAPI, RKE2 bootstrap/control plane, Metal3 + IPAM,
+   created as `CAPIProvider` resources for the Turtles operator). Installed
+   with the chart defaults (no custom values):
+
+   ```bash
+   helm install rancher-turtles-providers oci://registry.suse.com/edge/charts/rancher-turtles-providers \
+     --version 307.0.8+up0.27.0 \
+     --namespace cattle-turtles-system --create-namespace
+   ```
+
+   The chart must match the Rancher version, see
+   [Management cluster versions](#0-management-cluster-versions).
+
+Check:
+
+```bash
+kubectl get svc -n metal3-system          # Ironic service EXTERNAL-IP 192.168.122.12
+kubectl get pods -n metal3-system
+kubectl get capiprovider -A               # all Ready
+```
+
+The installed values can be read back without `helm` from the release secret:
+
+```bash
+S=$(kubectl get secret -n metal3-system -l owner=helm,name=metal3 -o name | sort -V | tail -1)
+kubectl get -n metal3-system $S -o jsonpath='{.data.release}' | base64 -d | base64 -d | gunzip | jq .config
+```
 
 ## 0. Management cluster versions
 
@@ -88,12 +163,7 @@ app finishes upgrading (it can sit in `pending-upgrade` for a few minutes).
 kubectl get capiprovider -A   # all should be Ready
 ```
 
-Install (if not already present):
-
-```bash
-helm install rancher-turtles-providers oci://registry.suse.com/edge/charts/rancher-turtles-providers \
-  --version 307.0.8+up0.27.0 --namespace cattle-turtles-system --create-namespace
-```
+Installation: see [Metal3 and CAPI providers](#metal3-and-capi-providers).
 
 ## 1. Build image
 
@@ -174,6 +244,56 @@ clusterctl describe cluster demo
 kubectl get bmh -w
 clusterctl get kubeconfig demo > demo.kubeconfig
 ```
+
+## Next steps
+
+The downstream cluster is up and, through the
+`cluster-api.cattle.io/rancher-auto-import: "true"` label, imported into Rancher
+by Turtles. Everything above the base cluster should therefore be delivered as
+workloads through **Fleet** (Rancher Continuous Delivery) instead of being baked
+into the image or the CAPI manifests:
+
+- **NVIDIA GPU Operator**: not part of this setup (the management cluster config
+  above has it disabled and the VMs have no GPUs). Needs GPU passthrough to the
+  worker VMs (or real hardware), then deploy the operator to the downstream
+  cluster with a Fleet bundle.
+- **SUSE Storage**: the nodes already carry the `suse-storage` systemd extension
+  and `iscsi-prep.service` (open-iscsi); the storage stack itself still has to be
+  deployed.
+- **SUSE AI components** on top (charts from the SUSE Application Collection,
+  which needs registry credentials on the downstream cluster).
+
+Outline of a Fleet `GitRepo` targeting the downstream cluster (created in the
+`fleet-default` workspace on the management cluster):
+
+```yaml
+apiVersion: fleet.cattle.io/v1alpha1
+kind: GitRepo
+metadata:
+  name: demo-addons
+  namespace: fleet-default
+spec:
+  repo: https://github.com/<org>/<repo>
+  branch: main
+  paths:
+    - gpu-operator
+  targets:
+    - clusterName: <rancher-cluster-name-of-demo>   # check: kubectl get clusters.fleet.cattle.io -n fleet-default
+```
+
+with a `gpu-operator/fleet.yaml` in that repo, e.g.:
+
+```yaml
+defaultNamespace: gpu-operator
+helm:
+  repo: https://helm.ngc.nvidia.com/nvidia
+  chart: gpu-operator
+  version: <version>        # pick the one validated for the SUSE AI release
+  values: {}                # driver/toolkit settings depend on the OS (SLES 16) and whether drivers are preinstalled
+```
+
+Not validated yet: chart version and values for SLES 16 nodes, how the imported
+cluster is named/labelled in Fleet, and registry credentials for SUSE images.
 
 ## Starting over
 
