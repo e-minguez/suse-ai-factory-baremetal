@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vm-cp-03
+type: Opaque
+stringData:
+  # must match the sushy-tools BMC credentials
+  username: admin
+  password: admin
+---
+apiVersion: metal3.io/v1alpha1
+kind: BareMetalHost
+metadata:
+  name: vm-cp-03
+  labels:
+    cluster-role: control-plane
+spec:
+  architecture: x86_64
+  online: true
+  bootMACAddress: "52:54:00:00:00:13"
+  # libvirt virtio disk; the BMO default (/dev/sda) does not exist
+  rootDeviceHints:
+    deviceName: /dev/vda
+  bmc:
+    address: redfish-virtualmedia://192.168.122.1:8443/redfish/v1/Systems/vm-cp-03
+    disableCertificateVerification: true
+    credentialsName: vm-cp-03

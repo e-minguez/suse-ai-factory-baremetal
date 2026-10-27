@@ -1,0 +1,32 @@
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  name: demo
+  namespace: default
+  labels:
+    cluster-api.cattle.io/rancher-auto-import: "true"
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks: ["10.42.0.0/16"]
+    services:
+      cidrBlocks: ["10.43.0.0/16"]
+  controlPlaneRef:
+    apiGroup: controlplane.cluster.x-k8s.io
+    kind: RKE2ControlPlane
+    name: demo
+  infrastructureRef:
+    apiGroup: infrastructure.cluster.x-k8s.io
+    kind: Metal3Cluster
+    name: demo
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: Metal3Cluster
+metadata:
+  name: demo
+  namespace: default
+spec:
+  controlPlaneEndpoint:
+    host: 192.168.122.20
+    port: 6443
+  cloudProviderEnabled: false

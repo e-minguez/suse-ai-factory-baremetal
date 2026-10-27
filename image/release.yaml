@@ -1,0 +1,4 @@
+manifestURI: oci://ghcr.io/suse/aif-uc-release-manifest:2.3.1
+components:
+  systemd:
+    - extension: suse-storage

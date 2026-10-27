@@ -1,0 +1,304 @@
+apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+kind: RKE2ControlPlane
+metadata:
+  name: demo
+  namespace: default
+spec:
+  replicas: 3
+  version: v1.35.8+rke2r1
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+  registrationMethod: control-plane-endpoint
+  machineTemplate:
+    spec:
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: Metal3MachineTemplate
+        name: demo-controlplane
+  serverConfig:
+    cni: canal
+    tlsSan:
+      - 192.168.122.20
+  agentConfig:
+    format: ignition
+    kubelet:
+      extraArgs:
+        - provider-id=metal3://PROVIDERID
+    additionalUserData:
+      config: |
+        # "variant: flatcar" is required: CAPRKE2 only drops its built-in /opt mount on
+        # /dev/disk/by-partlabel/p.lxroot (SL Micro layout) when this string is present
+        variant: flatcar
+        version: 1.4.0
+        passwd:
+          users:
+          - name: root
+            password_hash: "<ROOT_PASSWORD_HASH>"  # openssl passwd -6
+            ssh_authorized_keys:
+            - "<SSH_PUBLIC_KEY>"
+          - name: <USERNAME>
+            password_hash: "<USER_PASSWORD_HASH>"  # openssl passwd -6
+            ssh_authorized_keys:
+            - "<SSH_PUBLIC_KEY>"
+        storage:
+          filesystems:
+          # same partition twice: Butane allows one entry per device path, so use
+          # by-partlabel for /opt and by-label (filesystem label) for /home
+          - device: /dev/disk/by-partlabel/SYSTEM
+            format: btrfs
+            path: /opt
+            wipe_filesystem: false
+            mount_options:
+            - "subvol=/@/opt"
+          - device: /dev/disk/by-label/SYSTEM
+            format: btrfs
+            path: /home
+            wipe_filesystem: false
+            mount_options:
+            - "subvol=/@/home"
+          files:
+          - path: /etc/ssh/sshd_config.d/sshd.conf
+            overwrite: true
+            mode: 384
+            contents:
+              inline: PermitRootLogin yes
+          - path: /root/.profile
+            overwrite: true
+            mode: 416
+            contents:
+              inline: 'export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+                export PATH=${PATH}:/var/lib/rancher/rke2/bin
+                alias k=/var/lib/rancher/rke2/bin/kubectl
+                '
+          - path: /var/lib/elemental/iscsi-prep.sh
+            overwrite: true
+            mode: 493
+            contents:
+              inline: |
+                #!/usr/bin/env bash
+                # Seeds the /etc state open-iSCSI needs and starts iscsid. Run at every boot
+                # by iscsi-prep.service; the suse-storage sysext ships /usr only.
+                set -euo pipefail
+
+                log() { echo "iscsi-prep: $*"; }
+
+                for _ in $(seq 1 30); do
+                  [ -x /usr/sbin/iscsid ] && break
+                  sleep 2
+                done
+
+                if [ ! -x /usr/sbin/iscsid ]; then
+                  log "no /usr/sbin/iscsid after 60s, extension not merged; nothing to do"
+                  exit 0
+                fi
+
+                mkdir -p /etc/iscsi
+
+                # Unique per node, so it cannot be baked into the shared image.
+                if [ ! -s /etc/iscsi/initiatorname.iscsi ]; then
+                  if command -v iscsi-iname >/dev/null 2>&1; then
+                    initiator_name="$(iscsi-iname)"
+                  else
+                    initiator_name="iqn.2016-04.com.open-iscsi:$(hostname)"
+                  fi
+                  printf 'InitiatorName=%s\n' "$initiator_name" >/etc/iscsi/initiatorname.iscsi
+                  chmod 0600 /etc/iscsi/initiatorname.iscsi
+                  log "generated InitiatorName=$initiator_name"
+                fi
+
+                # Prefer a stock config shipped by the extension, else open-iscsi defaults.
+                if [ ! -s /etc/iscsi/iscsid.conf ]; then
+                  stock_conf=""
+                  for candidate in \
+                    /usr/etc/iscsi/iscsid.conf \
+                    /usr/share/open-iscsi/iscsid.conf \
+                    /usr/share/doc/packages/open-iscsi/iscsid.conf; do
+                    if [ -f "$candidate" ]; then
+                      stock_conf="$candidate"
+                      break
+                    fi
+                  done
+
+                  if [ -n "$stock_conf" ]; then
+                    cp "$stock_conf" /etc/iscsi/iscsid.conf
+                    log "seeded /etc/iscsi/iscsid.conf from $stock_conf"
+                  else
+                    cat >/etc/iscsi/iscsid.conf <<'CONF'
+                iscsid.startup = /bin/systemctl start iscsid.socket
+                node.startup = manual
+                node.session.timeo.replacement_timeout = 120
+                node.conn[0].timeo.noop_out_interval = 5
+                node.conn[0].timeo.noop_out_timeout = 5
+                CONF
+                    log "wrote fallback /etc/iscsi/iscsid.conf"
+                  fi
+                  chmod 0600 /etc/iscsi/iscsid.conf
+                fi
+
+                # --no-block: this unit must not wait on a job ordered after itself.
+                systemctl start --no-block iscsid.service
+                log "iscsid start requested"
+          - path: /var/lib/rancher/rke2/server/manifests/kubernetes-vip.yaml
+            overwrite: true
+            contents:
+              inline: |
+                apiVersion: v1
+                kind: Namespace
+                metadata:
+                  name: metallb-system
+                ---
+                apiVersion: v1
+                kind: Namespace
+                metadata:
+                  name: endpoint-copier-operator
+                ---
+                apiVersion: helm.cattle.io/v1
+                kind: HelmChart
+                metadata:
+                  name: metallb
+                  namespace: kube-system
+                spec:
+                  chart: oci://registry.suse.com/edge/charts/metallb
+                  targetNamespace: metallb-system
+                  version: "307.0.3+up0.16.1"
+                ---
+                apiVersion: helm.cattle.io/v1
+                kind: HelmChart
+                metadata:
+                  name: endpoint-copier-operator
+                  namespace: kube-system
+                spec:
+                  chart: oci://registry.suse.com/edge/charts/endpoint-copier-operator
+                  targetNamespace: endpoint-copier-operator
+                  version: "307.0.1+up0.3.0"
+                ---
+                apiVersion: metallb.io/v1beta1
+                kind: IPAddressPool
+                metadata:
+                  name: kubernetes-vip-ip-pool
+                  namespace: metallb-system
+                spec:
+                  addresses:
+                    - 192.168.122.20/32
+                  serviceAllocation:
+                    priority: 100
+                    namespaces:
+                      - default
+                    serviceSelectors:
+                      - matchExpressions:
+                          - key: serviceType
+                            operator: In
+                            values: [kubernetes-vip]
+                ---
+                apiVersion: metallb.io/v1beta1
+                kind: L2Advertisement
+                metadata:
+                  name: ip-pool-l2-adv
+                  namespace: metallb-system
+                spec:
+                  ipAddressPools:
+                    - kubernetes-vip-ip-pool
+                ---
+                apiVersion: v1
+                kind: Service
+                metadata:
+                  name: kubernetes-vip
+                  namespace: default
+                  labels:
+                    serviceType: kubernetes-vip
+                  annotations:
+                    metallb.universe.tf/loadBalancerIPs: "192.168.122.20"
+                spec:
+                  type: LoadBalancer
+                  ports:
+                    - name: rke2-api
+                      port: 9345
+                      protocol: TCP
+                      targetPort: 9345
+                    - name: k8s-api
+                      port: 6443
+                      protocol: TCP
+                      targetPort: 6443
+        systemd:
+          units:
+          - name: sshd.service
+            enabled: true
+          # The suse-storage sysext ships iscsid under /usr and nothing under /etc.
+          # bash runs the script because SELinux blocks executing var_lib_t files.
+          - name: iscsi-prep.service
+            enabled: true
+            contents: |
+              [Unit]
+              Description=Seed /etc for the sysext-delivered open-iSCSI and start iscsid
+              Wants=systemd-sysext.service
+              After=systemd-sysext.service local-fs.target
+              ConditionPathExists=/var/lib/elemental/iscsi-prep.sh
+
+              [Service]
+              Type=oneshot
+              RemainAfterExit=yes
+              ExecStart=/usr/bin/bash /var/lib/elemental/iscsi-prep.sh
+
+              [Install]
+              WantedBy=multi-user.target
+          - name: rke2-preinstall.service
+            enabled: true
+            contents: |
+              [Unit]
+              Description=rke2-preinstall
+              Wants=network-online.target
+              Before=rke2-install.service
+              ConditionPathExists=!/run/cluster-api/bootstrap-success.complete
+              [Service]
+              Type=oneshot
+              User=root
+              ExecStartPre=/bin/sh -c "mount -L config-2 /mnt"
+              # Note we use _ as a delimiter for sed here because the providerid includes / characters
+              ExecStart=/bin/sh -c "sed -i \"s_PROVIDERID_$(jq -r .providerid /mnt/openstack/latest/meta_data.json)_\" /etc/rancher/rke2/config.yaml"
+              ExecStart=/bin/sh -c "echo \"node-name: $(jq -r .name /mnt/openstack/latest/meta_data.json)\" >> /etc/rancher/rke2/config.yaml"
+              ExecStart=/bin/sh -c "hostnamectl set-hostname $(jq -r .name /mnt/openstack/latest/meta_data.json)"
+              ExecStart=/bin/sh -c "echo \"node-label:\" >> /etc/rancher/rke2/config.yaml"
+              ExecStart=/bin/sh -c "echo \"  - metal3.io/uuid=$(jq -r .uuid /mnt/openstack/latest/meta_data.json)\" >> /etc/rancher/rke2/config.yaml"
+              ExecStartPost=/bin/sh -c "umount /mnt"
+              [Install]
+              WantedBy=multi-user.target
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: Metal3MachineTemplate
+metadata:
+  name: demo-controlplane
+  namespace: default
+spec:
+  template:
+    spec:
+      # lab: skip disk cleaning on (de)provisioning; use "metadata" on real hardware
+      automatedCleaningMode: disabled
+      dataTemplate:
+        name: demo-controlplane-template
+      hostSelector:
+        matchLabels:
+          cluster-role: control-plane
+      image:
+        url: http://192.168.122.1:8000/elemental.raw
+        checksum: http://192.168.122.1:8000/elemental.raw.sha256
+        checksumType: sha256
+        diskFormat: raw
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: Metal3DataTemplate
+metadata:
+  name: demo-controlplane-template
+  namespace: default
+spec:
+  clusterName: demo
+  metaData:
+    # BMH name (vm-cp-01, ...) instead of the CAPI Machine name
+    objectNames:
+      - key: name
+        object: baremetalhost
+      - key: local-hostname
+        object: baremetalhost
+      - key: local_hostname
+        object: baremetalhost

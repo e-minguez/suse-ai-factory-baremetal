@@ -1,0 +1,7 @@
+schema: v0
+bootloader: grub
+# Last console= is /dev/console (systemd status, dracut emergency shell): serial
+# here for virsh console; tty0 still gets kernel messages in virt-manager.
+kernelCmdLine: "console=tty0 console=ttyS0,115200 ignition.platform.id=openstack"
+raw:
+  diskSize: 20G
