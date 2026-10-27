@@ -554,7 +554,8 @@ Node names come from `rke2-preinstall` (`node-name: .name` from the config drive
 `meta_data.json`). `.name` is rendered by CAPM3 from the `Metal3DataTemplate`
 `metaData.objectNames`: `object: baremetalhost` gives the BMH name (`vm-cp-01`);
 `object: machine` gives CAPI Machine names (`demo-workers-qml7w-b7dj4`). The
-same unit sets the OS hostname with `hostnamectl`. The BMO also always adds
+same unit sets the OS hostname with `hostnamectl` (validated: nodes register as
+`vm-cp-01..03`/`vm-wk-01..02` with matching hostnames). The BMO also always adds
 `metal3-name` (BMH name) and `metal3-namespace` to the metadata.
 
 ### Node boots but never joins

@@ -1,0 +1,18 @@
+# Elemental build output
+*.raw
+*.raw.sha256
+*.sha256
+*.qcow2
+*.iso
+*-config/
+
+# kubeconfigs / local secrets
+*.kubeconfig
+kubeconfig*
+*.ign
+.env
+
+# editor / OS
+.DS_Store
+*.swp
+*~
