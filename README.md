@@ -205,6 +205,39 @@ app finishes upgrading (it can sit in `pending-upgrade` for a few minutes).
 kubectl get capiprovider -A   # all should be Ready
 ```
 
+### Upgrading Rancher
+
+Upgrade one minor version at a time and check the
+[support matrix](https://www.suse.com/suse-rancher/support-matrix/) for the RKE2
+version of the management cluster. Find out how Rancher was installed:
+
+```bash
+kubectl get helmchart -A | grep -i rancher   # helm-controller HelmChart?
+helm list -n cattle-system                   # or a plain helm release?
+```
+
+HelmChart resource: bump `spec.version`, helm-controller runs the upgrade job:
+
+```bash
+kubectl patch helmchart -n <namespace> rancher --type merge -p '{"spec":{"version":"<new_version>"}}'
+```
+
+Helm release:
+
+```bash
+helm repo add rancher-prime https://charts.rancher.com/server-charts/prime
+helm repo update
+helm upgrade rancher rancher-prime/rancher -n cattle-system --version <new_version> --reuse-values
+```
+
+Then wait for the rollout, upgrade `rancher-turtles-providers` to the matching
+chart version and fix the stale provider versions as described above:
+
+```bash
+kubectl rollout status -n cattle-system deploy/rancher
+kubectl get capiprovider -A
+```
+
 Installation: see [Metal3 and CAPI providers](#metal3-and-capi-providers).
 
 ## 1. Build image
