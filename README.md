@@ -53,7 +53,10 @@ for i in 1 2 3; do scripts/create_empty_vm.sh -n vm-cp-0$i -m 52:54:00:00:00:1$i
 for i in 1 2; do scripts/create_empty_vm.sh -n vm-wk-0$i -m 52:54:00:00:00:2$i -s 100 -c 4 -M 8192; done
 ```
 
-Delete (only `<name>.qcow2` and `<name>-extra-disk-*.qcow2` in `VMFOLDER` are removed):
+Delete: undefines with `--remove-all-storage`, so every attached disk goes, including
+media such as the sushy-tools ISO; leftover `<name>.qcow2`/`<name>-extra-disk-*.qcow2`
+in `VMFOLDER` are removed too. Lists what will be deleted and asks first; `--yes` skips
+the prompt:
 
 ```bash
 scripts/delete_vm.sh vm-cp-01 vm-cp-02 vm-cp-03 vm-wk-01 vm-wk-02
