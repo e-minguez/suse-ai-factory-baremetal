@@ -9,9 +9,10 @@ source "${BASEDIR}/common.sh"
 
 usage() {
   cat <<EOF
-Usage: $0 [-f <variables_file>] [-y|--yes] <vmname> [<vmname> ...]
+Usage: $0 [-f <variables_file>] [-y|--yes] [<vmname> ...]
 
-  -f         Variables file (default: ${BASEDIR}/.env if present), for VMFOLDER
+  -f         Variables file (default: ${BASEDIR}/.env if present), for VMFOLDER.
+             If no <vmname> is given, VMNAME from this file is used
   -y, --yes  Do not ask for confirmation
 EOF
 }
@@ -29,9 +30,13 @@ while [[ $# -gt 0 ]]; do
     *) VMS+=("$1"); shift ;;
   esac
 done
-[[ ${#VMS[@]} -gt 0 ]] || { usage; exit 2; }
 
 load_env "$ENVFILE"
+# Fall back to VMNAME only from an explicit -f, never from the default .env
+if [[ ${#VMS[@]} -eq 0 && -n "$ENVFILE" && -n "${VMNAME:-}" ]]; then
+  VMS=("$VMNAME")
+fi
+[[ ${#VMS[@]} -gt 0 ]] || { usage; exit 2; }
 VMFOLDER="${VMFOLDER:-/var/lib/libvirt/images}"
 require virsh
 
