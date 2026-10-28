@@ -152,6 +152,48 @@ ships the Turtles operator; MetalLB is needed to expose Ironic on a fixed IP.
    The chart must match the Rancher version, see
    [Management cluster versions](#0-management-cluster-versions).
 
+Without the `helm` CLI, the same charts can be deployed as `HelmChart` resources
+for the helm-controller built into RKE2 (it runs a job that does the
+`helm install`/`upgrade`). The release name is `metadata.name`; a HelmChart with
+the same name and `targetNamespace` as an existing release upgrades it in place.
+
+```yaml
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: metal3
+  namespace: kube-system
+spec:
+  chart: oci://registry.suse.com/edge/charts/metal3
+  version: 307.0.31+up0.16.0
+  targetNamespace: metal3-system
+  createNamespace: true
+  valuesContent: |-
+    global:
+      ironicIP: 192.168.122.12
+      enable_vmedia_tls: false
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: rancher-turtles-providers
+  namespace: kube-system
+spec:
+  chart: oci://registry.suse.com/edge/charts/rancher-turtles-providers
+  version: 307.0.8+up0.27.0
+  targetNamespace: cattle-turtles-system
+  createNamespace: true
+```
+
+`kubectl apply -f` it, or drop the file into `/var/lib/rancher/rke2/server/manifests/`
+on a server node (RKE2 applies it automatically; removing the file deletes the
+HelmChart and uninstalls the chart). Upgrades: bump `spec.version`. Progress:
+
+```bash
+kubectl get helmchart -n kube-system metal3 rancher-turtles-providers
+kubectl logs -n kube-system job/helm-install-metal3
+```
+
 Check:
 
 ```bash
