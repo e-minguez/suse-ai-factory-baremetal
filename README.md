@@ -18,7 +18,46 @@ BMC emulation: sushy-tools on the hypervisor, see [sushy.md](sushy.md)
 | `cluster/10-controlplane.yaml` | `RKE2ControlPlane` (3 replicas, Butane, MetalLB/endpoint-copier VIP manifests) + Metal3 templates |
 | `cluster/20-workers.yaml` | `MachineDeployment` (2 replicas) + `RKE2ConfigTemplate` + Metal3 templates |
 | `scripts/teardown.sh` | Brute-force cleanup of the cluster, BMHs and Ironic nodes (lab only) |
+| `scripts/create_vm_with_image.sh` | Create and start a libvirt VM from an OS image (management nodes) |
+| `scripts/create_empty_vm.sh` | Create a powered-off libvirt VM with empty disks (BMHs) |
+| `scripts/delete_vm.sh` | Destroy/undefine VMs and delete their disks |
+| `scripts/common.sh`, `scripts/vm.env.example` | Shared helpers and optional variables for the VM scripts |
 | `sushy.md` | sushy-tools (Redfish BMC emulator) setup on the hypervisor |
+
+## Hypervisor VMs
+
+The `scripts/*_vm*.sh` scripts (libvirt only, adapted from
+[suse-edge/misc](https://github.com/suse-edge/misc/tree/main/slemicro)) run on the
+hypervisor against `qemu:///system`, the URI sushy-tools uses. They need
+`virt-install`, `virsh` and `qemu-img`, and write disks to `VMFOLDER`
+(default `/var/lib/libvirt/images`, so run them as root). VMs are UEFI,
+virtio disk/NIC, `host-passthrough` CPU. Defaults and variables:
+`scripts/vm.env.example`; run any script with `-h` for the flags. Sizes below are
+examples.
+
+Management nodes from the quickstart raw image (`-s` grows the disk before the
+first boot, see [Management cluster](#management-cluster)):
+
+```bash
+for i in 1 2 3; do
+  scripts/create_vm_with_image.sh -n mgmt0$i -m 52:54:00:00:00:0$i \
+    -i elemental.raw -s 100 -c 4 -M 16384
+done
+```
+
+BMH VMs, powered off with empty disks; the MACs must match `bootMACAddress` in
+`bmh/vm-*.yaml`. sushy-tools adds the virtual media cdrom itself:
+
+```bash
+for i in 1 2 3; do scripts/create_empty_vm.sh -n vm-cp-0$i -m 52:54:00:00:00:1$i -s 60 -c 4 -M 8192; done
+for i in 1 2; do scripts/create_empty_vm.sh -n vm-wk-0$i -m 52:54:00:00:00:2$i -s 100 -c 4 -M 8192; done
+```
+
+Delete (only `<name>.qcow2` and `<name>-extra-disk-*.qcow2` in `VMFOLDER` are removed):
+
+```bash
+scripts/delete_vm.sh vm-cp-01 vm-cp-02 vm-cp-03 vm-wk-01 vm-wk-02
+```
 
 ## Management cluster
 
